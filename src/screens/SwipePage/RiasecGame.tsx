@@ -1716,8 +1716,9 @@ export default function RiasecGame() {
 }, []);
 
   
-
-  const onDE = useCallback((e: PointerEvent) => {
+  //const onDE = useCallback((e: PointerEvent) => {
+  const onDE = useCallback(() => {
+  
   if (!dragState.current) return;
   const dx       = dragState.current.cx - dragState.current.sx;
   const dragMs   = performance.now() - (dragState.current.dragStart ?? performance.now()); // NOUVEAU
@@ -1762,8 +1763,8 @@ export default function RiasecGame() {
   // NOUVEAU : PointerEvents unifie mouse + touch en 3 listeners
   const handlePointerDown = (e: PointerEvent) => onDS(e);
   const handlePointerMove = (e: PointerEvent) => onDM(e);
-  const handlePointerUp   = (e: PointerEvent) => onDE(e);
-
+  const handlePointerUp   = () => onDE();
+  //const handlePointerUp   = (e: PointerEvent) => onDE(e);
   stack.addEventListener("pointerdown", handlePointerDown);
   document.addEventListener("pointermove", handlePointerMove);
   document.addEventListener("pointerup",   handlePointerUp);

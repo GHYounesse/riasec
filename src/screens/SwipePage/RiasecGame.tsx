@@ -2,16 +2,7 @@ import { useEffect, useRef, useCallback } from "react";
 import { supabase } from "../../supabaseClient";
 import { useState } from "react";
 
-// ─────────────────────────────────────────
-// TYPES
-// ─────────────────────────────────────────
-// interface Question {
-//   id: number;
-//   t: keyof typeof T;
-//   ti: string;
-//   su: string;
-//   prompt: string;
-// }
+
 type Question = {
   id: number;
   riasec_type: string;
@@ -25,25 +16,33 @@ interface TypeInfo {
   d: string;
 }
 
-// interface HistoryEntry {
-//   idx: number;
-//   liked: boolean;
-// }
+
 interface HistoryEntry {
   idx:              number;
   liked:            boolean;
   view_duration_ms: number;  // NOUVEAU : durée réelle de vue (pause corrigée)
   created_at:       number;  // NOUVEAU : timestamp absolu pour base de données
+  method:           "drag" | "button" | "keyboard";  // ADD
+  hesitation_ms:    number; 
 }
 
 
 interface DragState {
   sx:        number;
   cx:        number;
-  pressure?: number;   // NOUVEAU : pression tactile (0–1), Android récents
-  tiltX?:    number;   // NOUVEAU : angle stylet X
-  tiltY?:    number;   // NOUVEAU : angle stylet Y
-  dragStart?: number;  // NOUVEAU : performance.now() au début du drag
+  pressure?: number;   
+  tiltX?:    number;   
+  tiltY?:    number;   
+  dragStart: number; 
+  hesitation_ms:    number; 
+}
+
+
+interface BeaconPayload {
+  session_id:  string | undefined;
+  //scores:      Scores;
+  history:     HistoryEntry[];
+  flushed_at:  number;
 }
 type Scores = Record<keyof typeof T, number>;
 
@@ -88,7 +87,7 @@ const T: Record<string, TypeInfo> = {
 
 
 interface Session {
-  id?: string; // optional, will be filled after inserting in DB
+  id?: string; 
   device_fingerprint: string;
   locale: string;
   platform: string;
@@ -103,6 +102,8 @@ interface Session {
 const getDeviceFingerprint = (): string =>
   btoa(navigator.userAgent + "_" + screen.width + "x" + screen.height);
 
+
+const API_URL = "http://localhost:3001/api";
 // ─────────────────────────────────────────
 // COMPONENT
 // ─────────────────────────────────────────
@@ -120,10 +121,12 @@ export default function RiasecGame() {
   const scores    = useRef<Scores>({ R: 0, I: 0, A: 0, S: 0, E: 0, C: 0 });
   const history   = useRef<HistoryEntry[]>([]);
   const animLock  = useRef(false);
-  // const dragState = useRef<{ sx: number; cx: number } | null>(null);
+  
   const dragState = useRef<DragState | null>(null);
   const pool      = useRef<Record<number, HTMLDivElement>>({});
   const imgReady  = useRef<Record<number, boolean>>({});
+
+  const hasStarted = useRef(false);
 
 
   const cardViewStart = useRef<number>(0);
@@ -134,12 +137,75 @@ export default function RiasecGame() {
 
   
   const [questions, setQuestions] = useState<Question[]>([]);
- 
+  
+  // --- Batching refs ---
+  const pendingEvents = useRef<HistoryEntry[]>([]);
+  const flushTimer    = useRef<ReturnType<typeof setInterval> | null>(null);
+  const BATCH_SIZE    = 5;
+  const FLUSH_INTERVAL_MS = 10_000;
+  const LS_KEY = "riasec_failed_batches";
+
+
+  function saveToLocalBackup(payload: BeaconPayload): void {
+    try {
+      const existing: BeaconPayload[] = JSON.parse(
+        localStorage.getItem(LS_KEY) ?? "[]"
+      ) as BeaconPayload[];
+      existing.push(payload);
+      localStorage.setItem(LS_KEY, JSON.stringify(existing));
+    } catch {
+      console.warn("[LocalBackup] Failed to write to localStorage");
+    }
+  }
+
+  async function retryLocalBackup(): Promise<void> {
+    try {
+      const raw = localStorage.getItem(LS_KEY);
+      if (!raw) return;
+      const batches: BeaconPayload[] = JSON.parse(raw) as BeaconPayload[];
+      if (batches.length === 0) return;
+
+      const remaining: BeaconPayload[] = [];
+      for (const batch of batches) {
+        const blob = new Blob([JSON.stringify(batch)], { type: "application/json" });
+        const sent = navigator.sendBeacon(API_URL+"/batch", blob);
+        if (!sent) remaining.push(batch);
+      }
+      localStorage.setItem(LS_KEY, JSON.stringify(remaining));
+    } catch {
+      console.warn("[LocalBackup] Retry failed");
+    }
+  }
+
+  const flushBatch = useCallback(async (force = false): Promise<void> => {
+    if (pendingEvents.current.length === 0) return;
+    if (!force && pendingEvents.current.length < BATCH_SIZE) return;
+    if (!sessionRef.current?.id) return;
+
+    const batch = pendingEvents.current.splice(0, pendingEvents.current.length);
+
+    const payload: BeaconPayload = {
+      session_id: sessionRef.current.id,
+      
+      history:    batch,
+      flushed_at: Date.now(),
+    };
+
+    const blob = new Blob([JSON.stringify(payload)], { type: "application/json" });
+    const sent = navigator.sendBeacon(API_URL+"/batch", blob);
+
+    if (!sent) {
+      saveToLocalBackup(payload);         
+      pendingEvents.current.unshift(...batch); 
+    }
+  }, []);
   useEffect(() => {
   const fetchQuestions = async () => {
     const { data, error } = await supabase
       .from('questions')
-      .select('id, riasec_type, title, subtitle, prompt').limit(8); ;
+      .select('id, riasec_type, title, subtitle, prompt')
+      .eq('active', true)
+      .order('display_order', { ascending: true }).limit(10); 
 
     if (error) {
       console.error(error);
@@ -152,41 +218,41 @@ export default function RiasecGame() {
   
 }, []);
 
-  const getPlatform = () => {
-  if (typeof navigator === "undefined") return "unknown";
-
-  const ua = navigator.userAgent;
-
-  if (/android/i.test(ua)) return "Android";
-  if (/iphone|ipad|ipod/i.test(ua)) return "iOS";
-  if (/windows/i.test(ua)) return "Windows";
-  if (/mac/i.test(ua)) return "Mac";
-  if (/linux/i.test(ua)) return "Linux";
-
-  return "unknown";
-};
-//   const getDeviceType = () => {
+//   const getPlatform = () => {
 //   if (typeof navigator === "undefined") return "unknown";
 
 //   const ua = navigator.userAgent;
 
-//   if (/mobile/i.test(ua)) return "Phone";
-//   if (/tablet|ipad/i.test(ua)) return "Tablet";
+//   if (/android/i.test(ua)) return "Android";
+//   if (/iphone|ipad|ipod/i.test(ua)) return "iOS";
+//   if (/windows/i.test(ua)) return "Windows";
+//   if (/mac/i.test(ua)) return "Mac";
+//   if (/linux/i.test(ua)) return "Linux";
 
-//   return "Desktop";
+//   return "unknown";
 // };
+  const getDeviceType = () => {
+    if (typeof navigator === "undefined") return "unknown";
+
+    const ua = navigator.userAgent;
+
+    return /mobile|android|iphone|ipad|ipod/i.test(ua)
+      ? "mobile"
+      : "desktop";
+  };
 
   // Initialize session once on app load
   useEffect(() => {
+    if (hasStarted.current) return;
+    hasStarted.current = true;
   
-
+  retryLocalBackup();
   const startSession = async () => {
     const newSession: Omit<Session, 'completed_at' | 'total_duration_ms'> = {
       device_fingerprint: getDeviceFingerprint(),
       locale: navigator.language,
-      //platform: navigator.platform,
-      platform: getPlatform(),      // Android / iOS / Windows...
-      //device_type: getDeviceType(), 
+      //platform: getPlatform(),      // Android / iOS / Windows...
+      platform: getDeviceType(), 
       screen_width: window.innerWidth,
       screen_height: window.innerHeight,
       images_loaded: false,
@@ -242,9 +308,9 @@ export default function RiasecGame() {
   const mkCard = useCallback((idx: number): HTMLDivElement => {
     if (pool.current[idx]) return pool.current[idx];
 
-    //const q    = QS[idx];
+    
     const q= questions[idx];
-    //const info = T[q.t];
+    
     const info = T[q.riasec_type];
     const card = document.createElement("div");
     card.className   = "card";
@@ -274,7 +340,7 @@ export default function RiasecGame() {
     pool.current[idx] = card;
     
     return card;
-  }, [questions]);
+  }, [questions, loadImg]);
 
   
 
@@ -448,7 +514,7 @@ export default function RiasecGame() {
   };
   const showResults = useCallback(async() => {
     
-    console.log("sessionRef.current",sessionRef.current);
+    
     if (!sessionRef.current) return;
     const sessionId=sessionRef.current.id;
 
@@ -484,7 +550,30 @@ export default function RiasecGame() {
     const resBars   = resultsRef.current?.querySelector<HTMLDivElement>("#resBars");
     const resPcards = resultsRef.current?.querySelector<HTMLDivElement>("#resPcards");
     const ctaExplore = resultsRef.current?.querySelector<HTMLButtonElement>("#ctaExplore");
+    const { error: resultError } = await supabase
+    .from('results')
+    .insert([
+      {
+        session_id: sessionId,
 
+        score_R: sc.R,
+        score_I: sc.I,
+        score_A: sc.A,
+        score_S: sc.S,
+        score_E: sc.E,
+        score_C: sc.C,
+
+        top1: top3[0][0],
+        top2: top3[1][0],
+        top3: top3[2][0],
+
+        riasec_code: code,
+        created_at: new Date().toISOString(),
+      }
+    ]);
+    if(resultError){
+      console.error(resultError);
+    }
     if (resCode)   resCode.innerHTML   = top3.map(([t]) => `<span style="color:${T[t].c}">${t}</span>`).join("");
     if (resLabels) resLabels.innerHTML = top3.map(([t]) => T[t].n).join(" · ");
     if (resTotal)  resTotal.textContent = `${total} affinités positives sur ${questions.length} situations`;
@@ -554,10 +643,11 @@ export default function RiasecGame() {
         console.log(`Explorer le profil RIASEC ${code}`);
       };
     }
-  }, []);
+    
+  }, [questions.length]);
   
 
-  const swipe = useCallback((liked: boolean) => {
+  const swipe = useCallback((liked: boolean, method: "drag" | "button" | "keyboard", hesitation_ms = 0) => {
   if (animLock.current) return;
   animLock.current = true;
 
@@ -578,9 +668,23 @@ export default function RiasecGame() {
   history.current.push({
     idx:             cur.current,
     liked:           liked,
-    view_duration_ms: viewDuration,   // NOUVEAU
-    created_at:       absoluteTs,     // NOUVEAU
+    view_duration_ms: viewDuration,  
+    created_at:       absoluteTs,    
+    method,           
+    hesitation_ms,    
   });
+  pendingEvents.current.push({
+    idx:              cur.current,
+    liked,
+    view_duration_ms: viewDuration,
+    created_at:       absoluteTs,
+     method,           
+    hesitation_ms,    
+  });
+
+  if (pendingEvents.current.length >= BATCH_SIZE) {
+    flushBatch();
+  }
 
   console.debug("[swipe]", {
   "Item ID": q.id,
@@ -608,7 +712,7 @@ export default function RiasecGame() {
       renderStack();
     }
   }, 370);
-}, [renderStack, showResults,questions]);
+}, [renderStack, showResults,questions,flushBatch]);
 
   
 
@@ -617,16 +721,16 @@ export default function RiasecGame() {
   dragState.current = {
     sx: e.clientX,
     cx: e.clientX,
-    pressure: e.pressure,       // NOUVEAU : pression du doigt (0–1)
-    tiltX:    e.tiltX,          // NOUVEAU : angle stylet
+    pressure: e.pressure,      
+    tiltX:    e.tiltX,         
     tiltY:    e.tiltY,
-    dragStart: performance.now(), // NOUVEAU : timing précis sub-ms
+    dragStart: performance.now(), 
+    hesitation_ms: Math.round(performance.now() - cardViewStart.current), 
   };
   const stack = stackRef.current;
   const c = stack?.querySelector<HTMLDivElement>(`.card[data-i="${cur.current}"]`);
   if (c) {
     c.style.transition = "none";
-    // (stack as HTMLDivElement).setPointerCapture(e.pointerId); // NOUVEAU : capture pointer mobile
     c.setPointerCapture(e.pointerId);
   }
 }, []);
@@ -655,16 +759,18 @@ export default function RiasecGame() {
   
   if (!dragState.current) return;
   const dx       = dragState.current.cx - dragState.current.sx;
-  const dragMs   = performance.now() - (dragState.current.dragStart ?? performance.now()); // NOUVEAU
+  //const dragMs   = performance.now() - (dragState.current.dragStart ?? performance.now()); // NOUVEAU
+  const dragMs   = performance.now() - dragState.current.dragStart;
   const pressure = dragState.current.pressure ?? 0; // NOUVEAU
+  const hesitation  = dragState.current.hesitation_ms; // ADD
   dragState.current = null;
   const dragS= `${(dragMs / 1000).toFixed(1)} s`;
 
   // NOUVEAU : log comportemental (drag_duration_ms, pressure disponible sur Android)
   console.debug("[drag]", { dx, dragS, pressure });
 
-  if      (dx >  80) swipe(true);
-  else if (dx < -80) swipe(false);
+  if      (dx >  80) swipe(true, "drag", hesitation);
+  else if (dx < -80) swipe(false, "drag", hesitation);
   else               snapBack();
 }, [swipe, snapBack]);
 
@@ -699,46 +805,79 @@ export default function RiasecGame() {
   const handlePointerMove = (e: PointerEvent) => onDM(e);
   const handlePointerUp   = () => onDE();
   //const handlePointerUp   = (e: PointerEvent) => onDE(e);
+  const handlePointerCancel = () => {
+    dragState.current = null;
+    snapBack();
+  };
+  const onKeyDown = (e: KeyboardEvent) => {
+    if (animLock.current) return;
+    const hesitation = Math.round(performance.now() - cardViewStart.current);
+    if (e.key === "ArrowRight") swipe(true,  "keyboard", hesitation);
+    if (e.key === "ArrowLeft")  swipe(false, "keyboard", hesitation);
+  };
   stack.addEventListener("pointerdown", handlePointerDown);
   document.addEventListener("pointermove", handlePointerMove);
   document.addEventListener("pointerup",   handlePointerUp);
+  document.addEventListener("pointercancel", handlePointerCancel);
+  window.addEventListener("keydown", onKeyDown);
 
   
   const onVisibility = () => {
   if (document.hidden) {
     pauseStart.current = performance.now();
-    flush(); // ← fusionner flush ici
+    // flush(); // ← fusionner flush ici
+    flushBatch();// see Feature 5 — replace the inline flush() call
   } else {
-    totalPaused.current += performance.now() - pauseStart.current;
+    //totalPaused.current += performance.now() - pauseStart.current;
+    if (pauseStart.current > 0) {
+      totalPaused.current += performance.now() - pauseStart.current;
+      pauseStart.current = 0;
+    }
   }
 };
   document.addEventListener("visibilitychange", onVisibility);
 
-  // NOUVEAU : sendBeacon — garantit l'envoi même à la fermeture de l'onglet
-  const flush = () => {
-    const payload = JSON.stringify({
-      scores:  scores.current,
-      history: history.current,
-      flushed_at: Date.now(), // timestamp absolu
-    });
-    navigator.sendBeacon("/api/session", payload);
+  
+  const flush = (): void => {
+    const payload: BeaconPayload = {
+      session_id: sessionRef.current?.id,
+      //scores:     scores.current,
+      history:    history.current,
+      flushed_at: Date.now(),
+    };
+    const blob = new Blob([JSON.stringify(payload)], { type: "application/json" });
+    const sent = navigator.sendBeacon(API_URL+"/session", blob);
+    if (!sent) {
+      // beacon queue full — fall back to localStorage (Feature 6)
+      saveToLocalBackup(payload);
+    }
   };
+
+
   // document.addEventListener("visibilitychange", () => {
   //   if (document.hidden) flush();
   // });
-  document.removeEventListener("visibilitychange", onVisibility); 
+  // document.removeEventListener("visibilitychange", onVisibility); 
+  document.addEventListener("visibilitychange", onVisibility);
   window.addEventListener("beforeunload", flush);
 
   renderStack();
+   // ── Batching timer ──────────────────────
+  flushTimer.current = setInterval(() => flushBatch(), FLUSH_INTERVAL_MS);
 
   return () => {
     stack.removeEventListener("pointerdown", handlePointerDown);
     document.removeEventListener("pointermove", handlePointerMove);
     document.removeEventListener("pointerup",   handlePointerUp);
+
+    document.removeEventListener("pointercancel", handlePointerCancel);
     document.removeEventListener("visibilitychange", onVisibility);
     window.removeEventListener("beforeunload", flush);
+    window.removeEventListener("keydown", onKeyDown);
+    // ── Batching timer cleanup ──────────────
+    if (flushTimer.current) clearInterval(flushTimer.current);
   };
-}, [onDS, onDM, onDE, renderStack]);
+}, [onDS, onDM, onDE, renderStack,snapBack,flushBatch, swipe]);
 
   // ─────────────────────────────────────────
   // RENDER
@@ -1365,8 +1504,10 @@ export default function RiasecGame() {
           }}
         >↩</button>
 
-        <button className="abtn abtn-pass" onClick={() => { if (!animLock.current) swipe(false); }}>✕</button>
-        <button className="abtn abtn-like" onClick={() => { if (!animLock.current) swipe(true);  }}>♥</button>
+        <button className="abtn abtn-pass" onClick={() => 
+          { if (!animLock.current) swipe(false, "button", Math.round(performance.now() - cardViewStart.current)); }}>
+            ✕</button>
+        <button className="abtn abtn-like" onClick={() => { if (!animLock.current) swipe(true, "button", Math.round(performance.now() - cardViewStart.current));  }}>♥</button>
       </div>
 
       <div className="hint">← Passer &nbsp;·&nbsp; ♥ J'aime →</div>

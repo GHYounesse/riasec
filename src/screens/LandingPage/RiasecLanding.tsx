@@ -664,13 +664,13 @@ export default function RiasecLanding() {
 		/* ─ Card visuals ─ */
 		/* ─ Card visuals ─ */
 		.card-r {
-			background: url('src/assets/riasec_images/q001_R.jpg') center/cover no-repeat;
+			background: url('/riasec_images/q001_R.jpg') center/cover no-repeat;
 		}
 		.card-i {
-			background: url('src/assets/riasec_images/q002_R.jpg') center/cover no-repeat;
+			background: url('/riasec_images/q002_R.jpg') center/cover no-repeat;
 		}
 		.card-a {
-			background: url('src/assets/riasec_images/q003_R.jpg') center/cover no-repeat;
+			background: url('/riasec_images/q003_R.jpg') center/cover no-repeat;
 		}
 
 		/* ═══════════════════════════════════

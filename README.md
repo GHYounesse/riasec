@@ -1,73 +1,47 @@
-# React + TypeScript + Vite
-
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
-
-Currently, two official plugins are available:
-
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
-
-## React Compiler
-
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
-
-## Expanding the ESLint configuration
-
-If you are developing a production application, we recommend updating the configuration to enable type-aware lint rules:
-
-```js
-export default defineConfig([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
-
-      // Remove tseslint.configs.recommended and replace with this
-      tseslint.configs.recommendedTypeChecked,
-      // Alternatively, use this for stricter rules
-      tseslint.configs.strictTypeChecked,
-      // Optionally, add this for stylistic rules
-      tseslint.configs.stylisticTypeChecked,
-
-      // Other configs...
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
-```
-
-You can also install [eslint-plugin-react-x](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-x) and [eslint-plugin-react-dom](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-dom) for React-specific lint rules:
-
-```js
-// eslint.config.js
-import reactX from 'eslint-plugin-react-x'
-import reactDom from 'eslint-plugin-react-dom'
-
-export default defineConfig([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
-      // Enable lint rules for React
-      reactX.configs['recommended-typescript'],
-      // Enable lint rules for React DOM
-      reactDom.configs.recommended,
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
-```
+# RIASEC · AI — Career Orientation Game
+ 
+A swipe-based career orientation assessment built with **React + TypeScript**, powered by **Supabase** and AI-generated imagery. Users swipe through situational cards to discover their [RIASEC personality profile](https://en.wikipedia.org/wiki/Holland_Codes) and top career matches.
+ 
+---
+ 
+## What is RIASEC?
+ 
+RIASEC is a career interest model developed by John Holland. It classifies personalities into 6 types:
+ 
+| Code | Type | Description |
+|------|------|-------------|
+| R | Réaliste | Working with hands, tools, machines, outdoors |
+| I | Investigateur | Analyzing, researching, solving complex problems |
+| A | Artistique | Creating, expressing — arts, music, design, writing |
+| S | Social | Helping, teaching, counseling, caring for others |
+| E | Entreprenant | Leading, persuading, selling, managing |
+| C | Conventionnel | Organizing, managing data, following procedures |
+ 
+---
+ 
+## Features
+ 
+- **Tinder-style swipe cards** — drag, button, or keyboard (← →) to like/pass situations
+- **AI-generated imagery** — local images with Pollinations.ai fallback
+- **Real-time scoring** — per-type affinity scores updated on every swipe
+- **Radar chart results** — visual breakdown of your RIASEC profile
+- **Behavioral analytics** — view duration, hesitation time, swipe method tracked per card
+- **Session persistence** — Supabase-backed sessions, results, and event history
+- **Offline resilience** — failed beacon payloads saved to `localStorage` and retried on next load
+- **Batched telemetry** — swipe events sent in batches of 5, or every 10 seconds, via `sendBeacon`
+- **Pause-aware timing** — tab visibility changes are subtracted from view duration
+ 
+---
+ 
+## Tech Stack
+ 
+| Layer | Technology |
+|-------|-----------|
+| Framework | React 18 + TypeScript |
+| Database | Supabase (PostgreSQL) |
+| Images | Local `/riasec_images/` + [Pollinations.ai](https://pollinations.ai) fallback |
+| Analytics | Custom beacon API (`POST /api/batch`) |
+| Styling | Inline CSS (dark luxury design system) |
+| Fonts | DM Sans, Syne (Google Fonts) |
+ 
+---
